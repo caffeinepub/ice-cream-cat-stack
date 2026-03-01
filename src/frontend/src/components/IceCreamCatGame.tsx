@@ -22,6 +22,15 @@ interface StackedScoop {
   scaleTarget: number;
 }
 
+interface FloatLabel {
+  x: number;
+  y: number;
+  vy: number;
+  text: string;
+  life: number;
+  maxLife: number;
+}
+
 interface GameState {
   phase: "playing" | "gameover";
   swingX: number;
@@ -34,6 +43,9 @@ interface GameState {
   currentCat: CatType;
   particles: Particle[];
   shakeAmount: number;
+  stackOffsetY: number; // how far the stack has been lifted up
+  stackOffsetTarget: number; // target lift offset
+  floatLabels: FloatLabel[]; // floating text labels
 }
 
 interface Particle {
@@ -524,6 +536,75 @@ function darkenColor(hex: string, amount: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+// ─── Audio Helpers ────────────────────────────────────────────────────────────
+
+function getAudioContext(): AudioContext | null {
+  try {
+    return new (
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext
+    )();
+  } catch {
+    return null;
+  }
+}
+
+/** Soft "plop" drop sound */
+function playDropSound(ctx: AudioContext) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(520, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(180, ctx.currentTime + 0.18);
+
+  gain.gain.setValueAtTime(0.35, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 0.22);
+}
+
+/** Cheerful "pop" spawn sound */
+function playSpawnSound(ctx: AudioContext) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(880, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.08);
+  osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.18);
+
+  gain.gain.setValueAtTime(0.25, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 0.22);
+}
+
+/** Rising "woosh" when stack lifts */
+function playGoingUpSound(ctx: AudioContext) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(300, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(1000, ctx.currentTime + 0.35);
+
+  gain.gain.setValueAtTime(0.2, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 0.4);
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const SCOOP_RADIUS = 38;
@@ -540,8 +621,19 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
   const gameRef = useRef<GameState | null>(null);
   const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
   const [scoreDisplay, setScoreDisplay] = useState(0);
   const [currentCatName, setCurrentCatName] = useState("Tabby");
+
+  const getOrCreateAudio = useCallback(() => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = getAudioContext();
+    }
+    if (audioCtxRef.current?.state === "suspended") {
+      audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
+  }, []);
 
   const getRandomCat = useCallback((): CatType => {
     return CAT_TYPES[Math.floor(Math.random() * CAT_TYPES.length)];
@@ -581,6 +673,9 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
       currentCat: firstCat,
       particles: [],
       shakeAmount: 0,
+      stackOffsetY: 0,
+      stackOffsetTarget: 0,
+      floatLabels: [],
     };
     setScoreDisplay(0);
     setCurrentCatName(firstCat.name);
@@ -590,7 +685,9 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
     const state = gameRef.current;
     if (!state || state.dropping || state.phase !== "playing") return;
     state.dropping = true;
-  }, []);
+    const actx = getOrCreateAudio();
+    if (actx) playDropSound(actx);
+  }, [getOrCreateAudio]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -638,11 +735,13 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
         if (state.dropping) {
           state.dropY += 10 * dt;
 
-          // Determine landing target
+          // Determine landing target (in screen space, accounting for lift offset)
           const landY =
             state.stack.length === 0
-              ? coneY - SCOOP_RADIUS + 8
-              : state.stack[state.stack.length - 1].y - SCOOP_RADIUS * 1.7;
+              ? coneY - state.stackOffsetY - SCOOP_RADIUS + 8
+              : state.stack[state.stack.length - 1].y -
+                state.stackOffsetY -
+                SCOOP_RADIUS * 1.7;
 
           if (state.dropY >= landY) {
             // Check alignment
@@ -661,9 +760,10 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
                 Math.min(targetX + tolerance * 0.7, state.swingX),
               );
 
+              // Store y in world space (add back the offset so render subtracts it correctly)
               state.stack.push({
                 x: clampedX,
-                y: landY,
+                y: landY + state.stackOffsetY,
                 catType: state.currentCat,
                 scale: 1.25,
                 scaleTarget: 1.0,
@@ -686,9 +786,36 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
                 0.09,
               );
 
+              // Check if top scoop is near or above the dotted swing line
+              // swingY = SCOOP_RADIUS + 30
+              const topScoop = state.stack[state.stack.length - 1];
+              const topScoopScreenY = topScoop.y - state.stackOffsetY;
+              const dangZone = SCOOP_RADIUS + 30 + SCOOP_RADIUS * 2.5;
+              if (topScoopScreenY <= dangZone) {
+                // Lift the entire stack up
+                const lift = SCOOP_RADIUS * 1.7;
+                state.stackOffsetTarget += lift;
+                // Play going-up sound
+                const actx = audioCtxRef.current;
+                if (actx) playGoingUpSound(actx);
+                // Float label
+                state.floatLabels.push({
+                  x: clampedX,
+                  y: topScoop.y - state.stackOffsetTarget,
+                  vy: -2,
+                  text: "Going up! 🚀",
+                  life: 1,
+                  maxLife: 1,
+                });
+              }
+
               const nextCat = getRandomCat();
               state.currentCat = nextCat;
               setCurrentCatName(nextCat.name);
+
+              // Play spawn sound
+              const actx = audioCtxRef.current;
+              if (actx) playSpawnSound(actx);
 
               // Reset
               state.dropping = false;
@@ -713,6 +840,22 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
               scoop.scale = scoop.scaleTarget;
           }
         }
+
+        // Smooth stack lift
+        if (state.stackOffsetY !== state.stackOffsetTarget) {
+          state.stackOffsetY +=
+            (state.stackOffsetTarget - state.stackOffsetY) * 0.12 * dt;
+          if (Math.abs(state.stackOffsetY - state.stackOffsetTarget) < 0.5) {
+            state.stackOffsetY = state.stackOffsetTarget;
+          }
+        }
+
+        // Float labels
+        for (const fl of state.floatLabels) {
+          fl.y += fl.vy * dt;
+          fl.life -= 0.025 * dt;
+        }
+        state.floatLabels = state.floatLabels.filter((fl) => fl.life > 0);
 
         // Shake decay
         if (state.shakeAmount > 0.1) {
@@ -787,20 +930,21 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
         }
       }
 
-      // Stacked scoops
+      // Stacked scoops (apply vertical lift offset)
+      const liftY = state.stackOffsetY;
       for (const scoop of state.stack) {
         drawCatScoop(
           ctx,
           scoop.x,
-          scoop.y,
+          scoop.y - liftY,
           SCOOP_RADIUS,
           scoop.catType,
           scoop.scale,
         );
       }
 
-      // Cone
-      drawCone(ctx, coneX, coneY);
+      // Cone (also lifted with stack)
+      drawCone(ctx, coneX, coneY - liftY);
 
       // Dropping / swinging scoop
       if (state.phase === "playing") {
@@ -817,6 +961,19 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
         ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
         ctx.fillStyle = p.color;
         ctx.fill();
+        ctx.restore();
+      }
+
+      // Float labels (going up, etc.)
+      for (const fl of state.floatLabels) {
+        ctx.save();
+        ctx.globalAlpha = fl.life;
+        ctx.font = "bold 18px Outfit, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "white";
+        ctx.shadowColor = "rgba(180,80,200,0.8)";
+        ctx.shadowBlur = 10;
+        ctx.fillText(fl.text, fl.x, fl.y);
         ctx.restore();
       }
 
