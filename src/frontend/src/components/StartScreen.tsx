@@ -1,22 +1,16 @@
 import { useEffect, useState } from "react";
+import CatScoopPreview from "./CatScoopPreview";
 
 interface Props {
   onPlay: () => void;
   onHighScores: () => void;
 }
 
-const CAT_EMOJIS = ["🐱", "🐈", "🐾", "😸", "😺", "😻", "🐈‍⬛", "🙀"];
-
 export default function StartScreen({ onPlay, onHighScores }: Props) {
-  const [catIdx, setCatIdx] = useState(0);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
-    const interval = setInterval(() => {
-      setCatIdx((i) => (i + 1) % CAT_EMOJIS.length);
-    }, 800);
-    return () => clearInterval(interval);
   }, []);
 
   return (
@@ -32,32 +26,22 @@ export default function StartScreen({ onPlay, onHighScores }: Props) {
       }}
     >
       {/* Title area */}
-      <div className="flex flex-col items-center gap-2">
-        <div className="text-6xl mb-1">{CAT_EMOJIS[catIdx]}</div>
+      <div className="flex flex-col items-center gap-1">
         <h1
-          className="text-4xl font-black leading-tight"
-          style={{
-            fontFamily: "Outfit, sans-serif",
-            background:
-              "linear-gradient(135deg, oklch(0.68 0.18 350), oklch(0.65 0.20 290))",
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-            backgroundClip: "text",
-          }}
+          className="text-4xl font-black tracking-tight"
+          style={{ color: "oklch(0.35 0.12 290)" }}
         >
-          Ice Cream
-          <br />
-          Cat Stack!
+          🍦 Ice Cream Cat Stack
         </h1>
         <p
           className="text-base font-medium"
           style={{ color: "oklch(0.55 0.08 290)" }}
         >
-          Stack the purr-fect tower 🍦
+          Stack the purr-fect tower
         </p>
       </div>
 
-      {/* Preview image */}
+      {/* Preview canvas */}
       <div
         className="rounded-2xl overflow-hidden w-full max-w-xs"
         style={{
@@ -65,12 +49,7 @@ export default function StartScreen({ onPlay, onHighScores }: Props) {
           border: "2px solid oklch(0.88 0.05 320)",
         }}
       >
-        <img
-          src="/assets/generated/cat-scoops-preview.dim_400x200.png"
-          alt="Cat ice cream scoops"
-          className="w-full object-cover"
-          style={{ maxHeight: 160 }}
-        />
+        <CatScoopPreview />
       </div>
 
       {/* Instructions */}
