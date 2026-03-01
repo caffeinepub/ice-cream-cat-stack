@@ -550,41 +550,43 @@ function getAudioContext(): AudioContext | null {
   }
 }
 
-/** Soft "plop" drop sound */
-function playDropSound(ctx: AudioContext) {
+/** Soft "plop" drop sound — scheduled at `startAt` (defaults to now) */
+function playDropSound(ctx: AudioContext, startAt?: number) {
+  const t = startAt ?? ctx.currentTime;
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.connect(gain);
   gain.connect(ctx.destination);
 
   osc.type = "sine";
-  osc.frequency.setValueAtTime(520, ctx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(180, ctx.currentTime + 0.18);
+  osc.frequency.setValueAtTime(520, t);
+  osc.frequency.exponentialRampToValueAtTime(180, t + 0.18);
 
-  gain.gain.setValueAtTime(0.35, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+  gain.gain.setValueAtTime(0.35, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
 
-  osc.start(ctx.currentTime);
-  osc.stop(ctx.currentTime + 0.22);
+  osc.start(t);
+  osc.stop(t + 0.22);
 }
 
-/** Cheerful "pop" spawn sound */
-function playSpawnSound(ctx: AudioContext) {
+/** Cheerful "pop" spawn sound — scheduled at `startAt` (defaults to now) */
+function playSpawnSound(ctx: AudioContext, startAt?: number) {
+  const t = startAt ?? ctx.currentTime;
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.connect(gain);
   gain.connect(ctx.destination);
 
   osc.type = "triangle";
-  osc.frequency.setValueAtTime(880, ctx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.08);
-  osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.18);
+  osc.frequency.setValueAtTime(880, t);
+  osc.frequency.exponentialRampToValueAtTime(1320, t + 0.08);
+  osc.frequency.exponentialRampToValueAtTime(660, t + 0.18);
 
-  gain.gain.setValueAtTime(0.25, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+  gain.gain.setValueAtTime(0.25, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
 
-  osc.start(ctx.currentTime);
-  osc.stop(ctx.currentTime + 0.22);
+  osc.start(t);
+  osc.stop(t + 0.22);
 }
 
 /** Rising "woosh" when stack lifts */
@@ -625,12 +627,12 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
   const [scoreDisplay, setScoreDisplay] = useState(0);
   const [currentCatName, setCurrentCatName] = useState("Tabby");
 
-  const getOrCreateAudio = useCallback(() => {
+  const getOrCreateAudio = useCallback(async () => {
     if (!audioCtxRef.current) {
       audioCtxRef.current = getAudioContext();
     }
     if (audioCtxRef.current?.state === "suspended") {
-      audioCtxRef.current.resume();
+      await audioCtxRef.current.resume();
     }
     return audioCtxRef.current;
   }, []);
@@ -685,8 +687,9 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
     const state = gameRef.current;
     if (!state || state.dropping || state.phase !== "playing") return;
     state.dropping = true;
-    const actx = getOrCreateAudio();
-    if (actx) playDropSound(actx);
+    getOrCreateAudio().then((actx) => {
+      if (actx) playDropSound(actx);
+    });
   }, [getOrCreateAudio]);
 
   useEffect(() => {
@@ -738,8 +741,8 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
           // Determine landing target (in screen space, accounting for lift offset)
           const landY =
             state.stack.length === 0
-              ? coneY - state.stackOffsetY - SCOOP_RADIUS + 8
-              : state.stack[state.stack.length - 1].y -
+              ? coneY + state.stackOffsetY - SCOOP_RADIUS + 8
+              : state.stack[state.stack.length - 1].y +
                 state.stackOffsetY -
                 SCOOP_RADIUS * 1.7;
 
@@ -760,10 +763,10 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
                 Math.min(targetX + tolerance * 0.7, state.swingX),
               );
 
-              // Store y in world space (add back the offset so render subtracts it correctly)
+              // Store y in world space (subtract offset so render adds it correctly)
               state.stack.push({
                 x: clampedX,
-                y: landY + state.stackOffsetY,
+                y: landY - state.stackOffsetY,
                 catType: state.currentCat,
                 scale: 1.25,
                 scaleTarget: 1.0,
@@ -789,20 +792,22 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
               // Check if top scoop is near or above the dotted swing line
               // swingY = SCOOP_RADIUS + 30
               const topScoop = state.stack[state.stack.length - 1];
-              const topScoopScreenY = topScoop.y - state.stackOffsetY;
+              const topScoopScreenY = topScoop.y + state.stackOffsetY;
               const dangZone = SCOOP_RADIUS + 30 + SCOOP_RADIUS * 2.5;
               if (topScoopScreenY <= dangZone) {
-                // Lift the entire stack up
+                // Scroll the stack down (positive offset pushes cone+scoops down on screen,
+                // so the new scoop has room at the top — the stack appears to go up)
                 const lift = SCOOP_RADIUS * 1.7;
                 state.stackOffsetTarget += lift;
                 // Play going-up sound
-                const actx = audioCtxRef.current;
-                if (actx) playGoingUpSound(actx);
-                // Float label
+                getOrCreateAudio().then((actx) => {
+                  if (actx) playGoingUpSound(actx);
+                });
+                // Float label — store in world-space Y (without offset) so it rises with the stack
                 state.floatLabels.push({
                   x: clampedX,
-                  y: topScoop.y - state.stackOffsetTarget,
-                  vy: -2,
+                  y: topScoop.y - SCOOP_RADIUS * 1.5,
+                  vy: -3,
                   text: "Going up! 🚀",
                   life: 1,
                   maxLife: 1,
@@ -813,9 +818,11 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
               state.currentCat = nextCat;
               setCurrentCatName(nextCat.name);
 
-              // Play spawn sound
-              const actx = audioCtxRef.current;
-              if (actx) playSpawnSound(actx);
+              // Schedule spawn sound to play right after the drop sound ends (~0.25s)
+              getOrCreateAudio().then((actxSpawn) => {
+                if (actxSpawn)
+                  playSpawnSound(actxSpawn, actxSpawn.currentTime + 0.25);
+              });
 
               // Reset
               state.dropping = false;
@@ -936,7 +943,7 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
         drawCatScoop(
           ctx,
           scoop.x,
-          scoop.y - liftY,
+          scoop.y + liftY,
           SCOOP_RADIUS,
           scoop.catType,
           scoop.scale,
@@ -944,7 +951,7 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
       }
 
       // Cone (also lifted with stack)
-      drawCone(ctx, coneX, coneY - liftY);
+      drawCone(ctx, coneX, coneY + liftY);
 
       // Dropping / swinging scoop
       if (state.phase === "playing") {
@@ -964,7 +971,7 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
         ctx.restore();
       }
 
-      // Float labels (going up, etc.)
+      // Float labels (going up, etc.) — rendered in world-space with lift offset applied
       for (const fl of state.floatLabels) {
         ctx.save();
         ctx.globalAlpha = fl.life;
@@ -973,7 +980,7 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
         ctx.fillStyle = "white";
         ctx.shadowColor = "rgba(180,80,200,0.8)";
         ctx.shadowBlur = 10;
-        ctx.fillText(fl.text, fl.x, fl.y);
+        ctx.fillText(fl.text, fl.x, fl.y + liftY);
         ctx.restore();
       }
 
@@ -1013,7 +1020,14 @@ export default function IceCreamCatGame({ onGameOver }: Props) {
       canvas.removeEventListener("click", handleClick);
       canvas.removeEventListener("touchstart", handleTouch);
     };
-  }, [initGame, handleDrop, getRandomCat, spawnParticles, onGameOver]);
+  }, [
+    initGame,
+    handleDrop,
+    getRandomCat,
+    spawnParticles,
+    onGameOver,
+    getOrCreateAudio,
+  ]);
 
   return (
     <div className="flex flex-col items-center gap-3">
