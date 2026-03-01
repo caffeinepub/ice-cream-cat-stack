@@ -24,7 +24,7 @@ export default function GameOverScreen({
     if (score < 6) return "Pawsome! 😸 You're getting it!";
     if (score < 10) return "Purrfect! 🎉 Great stacking!";
     if (score < 15) return "Incredible! ⭐ Cat master!";
-    return "LEGENDARY! 🏆 You're a cat stack god!";
+    return "Holy Meow-ceroni! You are a LEGEND OF CAT STACKING! 🏆";
   };
 
   const handleSave = async () => {
